@@ -24,8 +24,14 @@ pub struct AppState {
     pub search: Arc<SearchIndex>,
     /// Charter（内置文档）内存索引：chat 的 search_docs 工具用
     pub docs: Arc<utopia_search::DocsIndex>,
-    /// 原始文件字节的存取接缝（内容寻址，key = sha256）；当前实现为本地磁盘
+    /// 原始文件字节的存取接缝（内容寻址，key = sha256）。
     pub blob: Arc<dyn crate::blob::BlobStore>,
+    /// true = 无永久进程、可横向扩缩的托管执行模型。
+    pub hosted: bool,
+    /// `tantivy` 或 `postgres`；检索层按它选择词法通道。
+    pub lexical_backend: String,
+    /// 控制面访问内部 hosted 端点时必须给出的共享密钥。
+    pub control_plane_token: Option<String>,
     pub open_registration: bool,
     /// 强制 Secure cookie（配置项）；未强制时按请求的 X-Forwarded-Proto 逐次判定
     pub cookie_secure: bool,
@@ -46,23 +52,52 @@ impl AppState {
         cfg: &AppConfig,
         search: Arc<SearchIndex>,
         jwt_secret: String,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let (events, _) = broadcast::channel(256);
         let data_dir = PathBuf::from(&cfg.data_dir);
-        let blob = Arc::new(crate::blob::LocalBlobStore::new(data_dir.join("files")));
-        Self {
+        let blob: Arc<dyn crate::blob::BlobStore> = match cfg.blob_backend.as_str() {
+            "local" => Arc::new(crate::blob::LocalBlobStore::new(data_dir.join("files"))),
+            "vercel" => {
+                let control_plane_url = cfg
+                    .control_plane_url
+                    .clone()
+                    .or_else(|| {
+                        std::env::var("VERCEL_URL")
+                            .ok()
+                            .filter(|value| !value.trim().is_empty())
+                            .map(|host| format!("https://{}", host.trim().trim_end_matches('/')))
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "UTOPIA_CONTROL_PLANE_URL or VERCEL_URL is required for Vercel Blob"
+                        )
+                    })?;
+                let token = cfg.control_plane_token.clone().ok_or_else(|| {
+                    anyhow::anyhow!("UTOPIA_CONTROL_PLANE_TOKEN is required for Vercel Blob")
+                })?;
+                Arc::new(crate::blob::VercelBlobStore::new(
+                    control_plane_url,
+                    token,
+                )?)
+            }
+            other => anyhow::bail!("unsupported blob backend: {other}"),
+        };
+        Ok(Self {
             pool,
             jwt_secret,
             search,
             docs: Arc::new(crate::docs_corpus::build_index()),
             blob,
+            hosted: cfg.hosted,
+            lexical_backend: cfg.lexical_backend.clone(),
+            control_plane_token: cfg.control_plane_token.clone(),
             open_registration: cfg.open_registration,
             cookie_secure: cfg.cookie_secure,
             worker_concurrency: Arc::new(std::sync::atomic::AtomicUsize::new(32)),
             model_gates: Arc::new(crate::llm_util::ModelGates::default()),
             events,
             live: Arc::new(crate::live::Registry::default()),
-        }
+        })
     }
 
     /// 无订阅者时 send 返回 Err——正常情况，静默忽略。
