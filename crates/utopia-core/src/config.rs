@@ -42,7 +42,7 @@ pub struct AppConfig {
     /// 强制给会话 cookie 打 Secure。缺省 false：由请求的 X-Forwarded-Proto 判定，
     /// 走 TLS 才打。只有代理不发那个头时才需要在这里强制打开。
     pub cookie_secure: bool,
-    /// 是否开放注册。false 时仅首个用户（引导部署）可注册，其余需管理员开放。
+    /// 是否开放注册。false 时仅首个用户可注册，其余需管理员开放。
     pub open_registration: bool,
 }
 
@@ -182,16 +182,20 @@ mod tests {
 
     #[test]
     fn unknown_backends_are_rejected_instead_of_falling_back() {
-        let mut cfg = AppConfig::default();
-        cfg.blob_backend = "mystery".into();
+        let cfg = AppConfig {
+            blob_backend: "mystery".into(),
+            ..AppConfig::default()
+        };
         assert!(cfg
             .validate()
             .unwrap_err()
             .to_string()
             .contains("BLOB_BACKEND"));
 
-        cfg.blob_backend = "local".into();
-        cfg.lexical_backend = "mystery".into();
+        let cfg = AppConfig {
+            lexical_backend: "mystery".into(),
+            ..AppConfig::default()
+        };
         assert!(cfg
             .validate()
             .unwrap_err()
