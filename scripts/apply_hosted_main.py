@@ -3,7 +3,7 @@
 
 Kept as an idempotent, reviewable transform because the upstream file is large and changes
 frequently. Every replacement has an explicit anchor and fails closed on source drift.
-The one-shot workflow also commits rustfmt output for all touched Rust files.
+The branch workflow also commits rustfmt output for all touched Rust files.
 """
 
 from pathlib import Path
