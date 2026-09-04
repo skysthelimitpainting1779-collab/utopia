@@ -271,22 +271,8 @@ jobs:
           for attempt in $(seq 1 90); do
             body=$(curl -sS --connect-timeout 10 --max-time 20 -H "$header" \
               "$BASE_URL/control/health" || true)
-            commit=$(printf '%s' "$body" | python3 -c '
-          import json, sys
-          try:
-              value = json.load(sys.stdin)
-              print(value.get("commit") or "")
-          except Exception:
-              print("")
-          ')
-            status=$(printf '%s' "$body" | python3 -c '
-          import json, sys
-          try:
-              value = json.load(sys.stdin)
-              print(value.get("status") or "")
-          except Exception:
-              print("")
-          ')
+            commit=$(printf '%s' "$body" | jq -r '.commit // empty' 2>/dev/null || true)
+            status=$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)
             if [ "$status" = "ok" ] && [ "$commit" = "$EXPECTED_SHA" ]; then
               matched=true
               break
@@ -307,10 +293,5 @@ jobs:
               echo "$path returned HTTP $code" >&2
               exit 1
             }
-            python3 - <<'PY'
-          import json
-          with open('/tmp/health.json', encoding='utf-8') as handle:
-              value = json.load(handle)
-          assert value.get('status') == 'ok', value
-          PY
+            jq -e '.status == "ok"' /tmp/health.json >/dev/null
           done
