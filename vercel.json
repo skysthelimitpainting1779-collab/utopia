@@ -4,15 +4,7 @@
     "utopia": {
       "root": ".",
       "entrypoint": "Dockerfile.vercel",
-      "runtime": "container",
-      "bindings": [
-        {
-          "type": "service",
-          "service": "control",
-          "format": "url",
-          "env": "UTOPIA_CONTROL_PLANE_URL"
-        }
-      ]
+      "runtime": "container"
     },
     "control": {
       "root": "control-plane",
