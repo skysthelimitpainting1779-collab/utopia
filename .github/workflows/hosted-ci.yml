@@ -41,8 +41,8 @@ jobs:
           POSTGRES_DB: utopia
         ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready --health-interval 5s
-          --health-timeout 5s --health-retries 10
+          --health-cmd "pg_isready -U utopia -d utopia"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       UTOPIA_DATABASE_URL: postgres://utopia:utopia@localhost:5432/utopia
       UTOPIA_TEST_REQUIRE_DB: "1"
@@ -71,8 +71,24 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+  control-plane:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: control-plane
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: control-plane/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm test
