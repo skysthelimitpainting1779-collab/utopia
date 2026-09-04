@@ -1,0 +1,38 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "utopia": {
+      "root": ".",
+      "entrypoint": "Dockerfile.vercel",
+      "runtime": "container"
+    },
+    "control": {
+      "root": "control-plane",
+      "framework": "nextjs",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "utopia",
+          "format": "url",
+          "env": "UTOPIA_INTERNAL_URL"
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/control/(.*)",
+      "destination": { "service": "control" }
+    },
+    {
+      "source": "/(.*)",
+      "destination": { "service": "utopia" }
+    }
+  ],
+  "crons": [
+    {
+      "path": "/control/jobs/tick",
+      "schedule": "* * * * *"
+    }
+  ]
+}
