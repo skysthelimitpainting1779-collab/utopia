@@ -84,6 +84,8 @@ select to_regclass('public.knowledge_bases');
 
 ## Vercel deployment
 
+For this fork's hosted bring-up, the authoritative target is the existing Vercel team **ItsHim** (`team_pT87gYWtUOGzUb7tTxjeVRKr`) and its existing project **utopia** (`prj_RbALHnx6StghYOyRGdG1enmAmyZ9`). Reuse that project; do not create a duplicate. The hosted implementation branch `feat/vercel-hosted-mvp` must deploy as Preview first. Keep the current production deployment untouched until the hosted smoke and post-redeploy persistence checks pass, then promote the verified Preview rather than merging or replacing production early.
+
 The root `vercel.json` defines two services:
 
 - `utopia`: `Dockerfile.vercel`, container runtime
