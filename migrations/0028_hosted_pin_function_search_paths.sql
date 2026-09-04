@@ -1,6 +1,5 @@
 -- Pin function search paths so helper functions cannot resolve through a
--- caller-controlled mutable path. The fact helper qualifies its table because
--- an empty search_path is intentional.
+-- caller-controlled mutable path while preserving their existing semantics.
 CREATE OR REPLACE FUNCTION public.audit_events_immutable()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -20,7 +19,8 @@ SET search_path = ''
 AS $function$
     SELECT e.proposed_predicate
       FROM public.fact_evidence e
-     WHERE e.fact_id = fact
-     ORDER BY e.created_at DESC
+     WHERE e.fact_id = fact AND e.proposed_predicate IS NOT NULL
+     GROUP BY e.proposed_predicate
+     ORDER BY count(*) DESC, e.proposed_predicate
      LIMIT 1
 $function$;
