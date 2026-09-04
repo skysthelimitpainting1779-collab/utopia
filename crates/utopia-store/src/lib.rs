@@ -11,6 +11,7 @@ pub mod db;
 pub mod documents;
 pub mod extraction_drops;
 pub mod graph;
+pub mod hosted_jobs;
 pub mod hosted_search;
 pub mod jobs;
 pub mod kbs;
