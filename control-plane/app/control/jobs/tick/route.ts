@@ -6,7 +6,7 @@ import { drainUtopia } from "../../../../workflows/drain-utopia";
 export const runtime = "nodejs";
 
 async function startDrain(request: Request): Promise<Response> {
-  const denied = authorizeCronOrInternalRequest(request);
+  const denied = await authorizeCronOrInternalRequest(request);
   if (denied) return denied;
 
   try {
