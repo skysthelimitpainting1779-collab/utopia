@@ -70,20 +70,24 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = AppConfig::load()?;
 
-    // 迁移要建表建触发器，运行时不需要那些权限。两者分开，应用才能用一个
-    // 只读写业务表、对台账只增不改的受限角色连库。迁移池用完立即释放，
-    // 那个高权限连接不在运行期常驻。
-    let migration_url = cfg.migration_url().to_string();
-    let separate_migration_role = cfg.migration_url.is_some();
-    {
-        let mig_pool = utopia_store::db::connect(&migration_url, Some(2)).await?;
-        utopia_store::db::migrate(&mig_pool).await?;
-        mig_pool.close().await;
-    }
-    if separate_migration_role {
-        tracing::info!("数据库迁移完成（迁移身份与运行身份分离）");
+    if cfg.migrate_on_startup {
+        // 迁移要建表建触发器，运行时不需要那些权限。两者分开，应用才能用一个
+        // 只读写业务表、对台账只增不改的受限角色连库。迁移池用完立即释放，
+        // 那个高权限连接不在运行期常驻。
+        let migration_url = cfg.migration_url().to_string();
+        let separate_migration_role = cfg.migration_url.is_some();
+        {
+            let mig_pool = utopia_store::db::connect(&migration_url, Some(2)).await?;
+            utopia_store::db::migrate(&mig_pool).await?;
+            mig_pool.close().await;
+        }
+        if separate_migration_role {
+            tracing::info!("数据库迁移完成（迁移身份与运行身份分离）");
+        } else {
+            tracing::info!("数据库迁移完成");
+        }
     } else {
-        tracing::info!("数据库迁移完成");
+        tracing::info!("跳过启动迁移（由部署阶段负责）");
     }
 
     let pool = utopia_store::db::connect(&cfg.database_url, cfg.db_max_connections).await?;
