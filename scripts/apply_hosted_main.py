@@ -28,6 +28,27 @@ replace_once(
     "hosted module declaration",
 )
 
+migration_start = "    // 迁移要建表建触发器，运行时不需要那些权限。两者分开，应用才能用一个\n"
+migration_end = "    let pool = utopia_store::db::connect(&cfg.database_url, cfg.db_max_connections).await?;\n"
+migration_marker = "    if cfg.migrate_on_startup {\n        // 迁移要建表建触发器，运行时不需要那些权限。两者分开，应用才能用一个\n"
+if migration_marker not in text:
+    start = text.find(migration_start)
+    end = text.find(migration_end)
+    if start < 0 or end < 0 or end <= start:
+        raise SystemExit("source drift: cannot locate startup migration block")
+    prefix = text[:start]
+    block = text[start:end]
+    suffix = text[end:]
+    text = (
+        prefix
+        + "    if cfg.migrate_on_startup {\n"
+        + textwrap.indent(block, "    ")
+        + "    } else {\n"
+        + "        tracing::info!(\"跳过启动迁移（由部署阶段负责）\");\n"
+        + "    }\n\n"
+        + suffix
+    )
+
 replace_once(
     "    reindex_if_empty(&pool, &search).await;",
     "    if cfg.lexical_backend == \"tantivy\" {\n"
