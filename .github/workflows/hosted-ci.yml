@@ -240,3 +240,77 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Vercel container image
         run: docker build --file Dockerfile.vercel --tag utopia-vercel:test .
+
+  preview-health:
+    if: github.ref == 'refs/heads/feat/vercel-hosted-mvp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      BASE_URL: https://utopia-git-feat-vercel-hosted-mvp-its-him.vercel.app
+      EXPECTED_SHA: ${{ github.sha }}
+    steps:
+      - name: Let the Git-triggered Preview enter the deployment queue
+        run: sleep 30
+      - uses: actions/github-script@v7
+        id: oidc
+        with:
+          script: |
+            const token = await core.getIDToken();
+            core.setSecret(token);
+            core.setOutput('token', token);
+      - name: Wait for this exact Preview and verify all hosted services
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          set -euo pipefail
+          header="x-vercel-trusted-oidc-idp-token: $OIDC_TOKEN"
+          matched=false
+
+          for attempt in $(seq 1 90); do
+            body=$(curl -sS --connect-timeout 10 --max-time 20 -H "$header" \
+              "$BASE_URL/control/health" || true)
+            commit=$(printf '%s' "$body" | python3 -c '
+          import json, sys
+          try:
+              value = json.load(sys.stdin)
+              print(value.get("commit") or "")
+          except Exception:
+              print("")
+          ')
+            status=$(printf '%s' "$body" | python3 -c '
+          import json, sys
+          try:
+              value = json.load(sys.stdin)
+              print(value.get("status") or "")
+          except Exception:
+              print("")
+          ')
+            if [ "$status" = "ok" ] && [ "$commit" = "$EXPECTED_SHA" ]; then
+              matched=true
+              break
+            fi
+            sleep 5
+          done
+
+          [ "$matched" = true ] || {
+            echo "Exact protected Preview did not become reachable through GitHub OIDC" >&2
+            exit 1
+          }
+
+          for path in /control/health /control/blob/health /api/v1/health; do
+            code=$(curl -sS --connect-timeout 10 --max-time 30 \
+              -H "$header" -o /tmp/health.json -w '%{http_code}' "$BASE_URL$path")
+            cat /tmp/health.json
+            [ "$code" = "200" ] || {
+              echo "$path returned HTTP $code" >&2
+              exit 1
+            }
+            python3 - <<'PY'
+          import json
+          with open('/tmp/health.json', encoding='utf-8') as handle:
+              value = json.load(handle)
+          assert value.get('status') == 'ok', value
+          PY
+          done
