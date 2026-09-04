@@ -13,6 +13,9 @@ pub struct AppConfig {
     /// 应用可以用一个只读写业务表、对台账只增不改的受限角色连库。
     /// 不设则回落到 `database_url`：既有部署无需改动即可照常升级。
     pub migration_url: Option<String>,
+    /// 是否在服务进程启动时跑迁移。自部署缺省开启；托管部署在发布阶段迁移后关闭，
+    /// 避免每个冷启动实例都争用 DDL 锁和高权限连接。
+    pub migrate_on_startup: bool,
     pub bind_addr: String,
     /// Vercel 等无持久进程托管环境的总开关。缺省关闭，原来的自部署行为不变。
     pub hosted: bool,
@@ -51,6 +54,7 @@ impl Default for AppConfig {
         Self {
             database_url: "postgres://utopia:utopia@localhost:1517/utopia".into(),
             migration_url: None,
+            migrate_on_startup: true,
             bind_addr: "0.0.0.0:1516".into(),
             hosted: false,
             blob_backend: "local".into(),
@@ -146,6 +150,7 @@ mod tests {
     fn defaults_preserve_the_self_hosted_runtime() {
         let cfg = AppConfig::default();
         assert!(!cfg.hosted);
+        assert!(cfg.migrate_on_startup);
         assert_eq!(cfg.blob_backend, "local");
         assert_eq!(cfg.lexical_backend, "tantivy");
         assert_eq!(cfg.runtime_bind_addr().unwrap(), cfg.bind_addr);
