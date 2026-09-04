@@ -49,10 +49,16 @@ if wrapped_marker not in text:
     end = text.find(end_anchor)
     if start < 0 or end < 0 or end <= start:
         raise SystemExit("source drift: cannot locate permanent worker/scheduler block")
+    prefix = text[:start]
     block = text[start:end]
-    text = text[:start] + "    if !cfg.hosted {\n" + textwrap.indent(block, "    ")
-    text += "" if False else ""
-    text = text[: start + len("    if !cfg.hosted {\n") + len(textwrap.indent(block, "    "))] + "    }\n\n" + text[end:]
+    suffix = text[end:]
+    text = (
+        prefix
+        + "    if !cfg.hosted {\n"
+        + textwrap.indent(block, "    ")
+        + "    }\n\n"
+        + suffix
+    )
 
 replace_once(
     "    let app = api::router(state, &cfg);\n"
