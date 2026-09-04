@@ -22,11 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Reject generated control-plane output
+      - name: Reject generated hosted-service output
         run: |
-          tracked=$(git ls-files 'control-plane/.next/**' 'control-plane/.workflow-data/**' 'control-plane/node_modules/**')
+          tracked=$(git ls-files \
+            'control-plane/.next/**' 'control-plane/.workflow-data/**' 'control-plane/node_modules/**' \
+            'blob-control/.next/**' 'blob-control/.workflow-data/**' 'blob-control/node_modules/**')
           if [ -n "$tracked" ]; then
-            echo "Generated control-plane output is tracked:"
+            echo "Generated hosted-service output is tracked:"
             echo "$tracked"
             exit 1
           fi
@@ -40,40 +42,88 @@ jobs:
 
           services = cfg.get("services")
           assert isinstance(services, dict), "vercel.json must define services"
-          assert set(services) == {"utopia", "control"}, "unexpected Vercel service set"
+          assert set(services) == {"utopia", "control", "blob-control"}, (
+              "unexpected Vercel service set"
+          )
 
           utopia = services["utopia"]
           control = services["control"]
+          blob = services["blob-control"]
+
           assert utopia.get("root") == "."
           assert utopia.get("entrypoint") == "Dockerfile.vercel"
           assert utopia.get("runtime") == "container"
           assert control.get("root") == "control-plane"
           assert control.get("framework") == "nextjs"
+          assert blob.get("root") == "blob-control"
+          assert blob.get("framework") == "nextjs"
 
-          def has_binding(caller, target, env):
-              return any(
-                  item.get("type") == "service"
-                  and item.get("service") == target
-                  and item.get("format") == "url"
-                  and item.get("env") == env
-                  for item in caller.get("bindings", [])
-              )
+          def service_bindings(caller):
+              result = []
+              for item in caller.get("bindings", []):
+                  assert item.get("type") == "service", "only service bindings are expected"
+                  target = item.get("service")
+                  assert target in services, f"binding targets unknown service: {target}"
+                  assert item.get("format") == "url", "service bindings must inject URLs"
+                  assert isinstance(item.get("env"), str) and item["env"], (
+                      "service bindings must declare a non-empty env name"
+                  )
+                  result.append((target, item["env"]))
+              return result
 
-          # Workflow -> Rust stays private. Rust -> control intentionally uses the
-          # same-deployment VERCEL_URL fallback in AppState, because Vercel rejects
-          # circular service binding graphs (utopia -> control -> utopia).
-          assert has_binding(
-              control, "utopia", "UTOPIA_INTERNAL_URL"
-          ), "control -> utopia service binding is required"
-          assert not has_binding(
-              utopia, "control", "UTOPIA_CONTROL_PLANE_URL"
-          ), "utopia -> control would create a circular Vercel service binding"
+          binding_map = {
+              name: service_bindings(service)
+              for name, service in services.items()
+          }
+
+          assert binding_map["control"] == [("utopia", "UTOPIA_INTERNAL_URL")], (
+              "control -> utopia binding is required"
+          )
+          assert binding_map["utopia"] == [
+              ("blob-control", "UTOPIA_CONTROL_PLANE_URL")
+          ], "utopia -> blob-control binding is required"
+          assert binding_map["blob-control"] == [], (
+              "blob-control must remain a leaf service"
+          )
+
+          # Vercel rejects circular service-binding graphs. Keep this generic so
+          # future service additions cannot silently recreate a cycle.
+          graph = {
+              name: [target for target, _ in bindings]
+              for name, bindings in binding_map.items()
+          }
+          visiting = set()
+          visited = set()
+
+          def visit(node):
+              if node in visiting:
+                  raise AssertionError(f"circular Vercel service binding at {node}")
+              if node in visited:
+                  return
+              visiting.add(node)
+              for target in graph[node]:
+                  visit(target)
+              visiting.remove(node)
+              visited.add(node)
+
+          for node in graph:
+              visit(node)
 
           rewrites = cfg.get("rewrites", [])
           assert rewrites == [
-              {"source": "/control/(.*)", "destination": {"service": "control"}},
-              {"source": "/(.*)", "destination": {"service": "utopia"}},
-          ], "Vercel service rewrites must keep control first and catch-all last"
+              {
+                  "source": "/control/blob/(.*)",
+                  "destination": {"service": "blob-control"},
+              },
+              {
+                  "source": "/control/(.*)",
+                  "destination": {"service": "control"},
+              },
+              {
+                  "source": "/(.*)",
+                  "destination": {"service": "utopia"},
+              },
+          ], "Vercel service rewrites must preserve most-specific-first routing"
 
           crons = cfg.get("crons", [])
           assert {
@@ -163,6 +213,24 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: control-plane/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  blob-control:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blob-control
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: blob-control/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: blob-control/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
 

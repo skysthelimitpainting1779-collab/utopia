@@ -4,7 +4,15 @@
     "utopia": {
       "root": ".",
       "entrypoint": "Dockerfile.vercel",
-      "runtime": "container"
+      "runtime": "container",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "blob-control",
+          "format": "url",
+          "env": "UTOPIA_CONTROL_PLANE_URL"
+        }
+      ]
     },
     "control": {
       "root": "control-plane",
@@ -17,9 +25,17 @@
           "env": "UTOPIA_INTERNAL_URL"
         }
       ]
+    },
+    "blob-control": {
+      "root": "blob-control",
+      "framework": "nextjs"
     }
   },
   "rewrites": [
+    {
+      "source": "/control/blob/(.*)",
+      "destination": { "service": "blob-control" }
+    },
     {
       "source": "/control/(.*)",
       "destination": { "service": "control" }
