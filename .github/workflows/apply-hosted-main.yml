@@ -7,6 +7,7 @@ on:
       - .github/workflows/apply-hosted-main.yml
       - scripts/apply_hosted_main.py
       - control-plane/package.json
+      - .gitignore
 
 permissions:
   contents: write
@@ -28,6 +29,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Remove accidentally tracked generated output
+        run: |
+          git rm -r --cached --ignore-unmatch control-plane/.next control-plane/.workflow-data
       - name: Apply idempotent Rust entrypoint patch
         run: python3 scripts/apply_hosted_main.py
       - name: Format Rust
@@ -41,12 +45,12 @@ jobs:
           pnpm check
       - name: Commit deterministic generated changes
         run: |
-          if git diff --quiet; then
+          git add -A
+          if git diff --cached --quiet; then
             echo "No generated changes"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: format hosted runtime and lock control plane"
+          git commit -m "chore: finalize hosted runtime sources"
           git push origin HEAD:feat/vercel-hosted-mvp
