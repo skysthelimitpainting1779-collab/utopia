@@ -6,8 +6,10 @@ const EXPECTED_AUDIENCE = "https://github.com/skysthelimitpainting1779-collab";
 const EXPECTED_REPOSITORY = "skysthelimitpainting1779-collab/utopia";
 const EXPECTED_REPOSITORY_ID = "1357530075";
 const EXPECTED_REF = "refs/heads/feat/vercel-hosted-mvp";
-const EXPECTED_WORKFLOW_REF =
-  `${EXPECTED_REPOSITORY}/.github/workflows/hosted-ci.yml@${EXPECTED_REF}`;
+const EXPECTED_WORKFLOW_REFS = new Set([
+  `${EXPECTED_REPOSITORY}/.github/workflows/hosted-ci.yml@${EXPECTED_REF}`,
+  `${EXPECTED_REPOSITORY}/.github/workflows/hosted-full-smoke.yml@${EXPECTED_REF}`,
+]);
 
 type JwtHeader = { alg?: unknown; kid?: unknown; typ?: unknown };
 
@@ -54,11 +56,11 @@ export function validateGitHubPreviewClaims(
   if (String(claims.repository_id ?? "") !== EXPECTED_REPOSITORY_ID) return false;
   if (claims.ref !== EXPECTED_REF) return false;
   if (!expectedSha || claims.sha !== expectedSha) return false;
-  if (claims.workflow_ref !== EXPECTED_WORKFLOW_REF) return false;
-  if (claims.runner_environment !== "github-hosted") return false;
-  if (claims.event_name !== "push" && claims.event_name !== "workflow_dispatch") {
+  if (typeof claims.workflow_ref !== "string" || !EXPECTED_WORKFLOW_REFS.has(claims.workflow_ref)) {
     return false;
   }
+  if (claims.runner_environment !== "github-hosted") return false;
+  if (claims.event_name !== "push" && claims.event_name !== "workflow_dispatch") return false;
   if (
     typeof claims.exp !== "number" ||
     typeof claims.iat !== "number" ||
