@@ -20,7 +20,10 @@ export type DrainSummary = {
 
 async function tickUtopiaStep(): Promise<UtopiaTickResponse> {
   "use step";
-  return tickUtopia({ maxJobs: 4, leaseSeconds: 900 });
+  // Keep one domain job inside each Rust HTTP invocation. Workflow supplies
+  // durability and repetition; this prevents a single Fluid request from
+  // accumulating several slow extraction/LLM jobs behind one timeout budget.
+  return tickUtopia({ maxJobs: 1, leaseSeconds: 900 });
 }
 
 export async function drainUtopia(): Promise<DrainSummary> {

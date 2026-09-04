@@ -30,9 +30,54 @@ jobs:
             echo "$tracked"
             exit 1
           fi
-      - name: Validate deployment files
+      - name: Validate Vercel Services topology
         run: |
-          python3 -m json.tool vercel.json >/dev/null
+          python3 - <<'PY'
+          import json
+
+          with open("vercel.json", encoding="utf-8") as handle:
+              cfg = json.load(handle)
+
+          services = cfg.get("services")
+          assert isinstance(services, dict), "vercel.json must define services"
+          assert set(services) == {"utopia", "control"}, "unexpected Vercel service set"
+
+          utopia = services["utopia"]
+          control = services["control"]
+          assert utopia.get("root") == "."
+          assert utopia.get("entrypoint") == "Dockerfile.vercel"
+          assert utopia.get("runtime") == "container"
+          assert control.get("root") == "control-plane"
+          assert control.get("framework") == "nextjs"
+
+          def has_binding(caller, target, env):
+              return any(
+                  item.get("type") == "service"
+                  and item.get("service") == target
+                  and item.get("format") == "url"
+                  and item.get("env") == env
+                  for item in caller.get("bindings", [])
+              )
+
+          assert has_binding(
+              control, "utopia", "UTOPIA_INTERNAL_URL"
+          ), "control -> utopia service binding is required"
+          assert has_binding(
+              utopia, "control", "UTOPIA_CONTROL_PLANE_URL"
+          ), "utopia -> control service binding is required"
+
+          rewrites = cfg.get("rewrites", [])
+          assert rewrites == [
+              {"source": "/control/(.*)", "destination": {"service": "control"}},
+              {"source": "/(.*)", "destination": {"service": "utopia"}},
+          ], "Vercel service rewrites must keep control first and catch-all last"
+
+          crons = cfg.get("crons", [])
+          assert {
+              "path": "/control/jobs/tick",
+              "schedule": "* * * * *",
+          } in crons, "once-per-minute hosted drain cron is required"
+          PY
           bash -n scripts/smoke-hosted.sh
           git diff --check
 
