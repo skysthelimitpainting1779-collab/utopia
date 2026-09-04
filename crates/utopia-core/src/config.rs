@@ -74,8 +74,17 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
+        // Managed platforms can materialize declared-but-unset variables as an
+        // empty string. Treat those exactly like an absent variable so an empty
+        // optional value cannot replace a typed default (for example, `""`
+        // cannot override the boolean `open_registration = true`). Explicit
+        // non-empty environment values keep their normal highest precedence.
+        let env = Env::prefixed("UTOPIA_").filter(|key| {
+            Env::var(&format!("UTOPIA_{}", key.as_str()))
+                .is_some_and(|value| !value.trim().is_empty())
+        });
         let cfg: Self = Figment::from(Serialized::defaults(AppConfig::default()))
-            .merge(Env::prefixed("UTOPIA_"))
+            .merge(env)
             .extract()?;
         cfg.validate()?;
         Ok(cfg)
