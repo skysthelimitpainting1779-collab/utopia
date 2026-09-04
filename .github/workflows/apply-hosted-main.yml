@@ -1,16 +1,18 @@
-name: Apply hosted main patch
+name: Finalize hosted source
 
 on:
   push:
     branches: [feat/vercel-hosted-mvp]
     paths:
+      - .github/workflows/apply-hosted-main.yml
       - scripts/apply_hosted_main.py
+      - control-plane/package.json
 
 permissions:
   contents: write
 
 jobs:
-  apply:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +22,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Apply idempotent patch
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: control-plane/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply idempotent Rust entrypoint patch
         run: python3 scripts/apply_hosted_main.py
-      - name: Format
+      - name: Format Rust
         run: cargo fmt --all
-      - name: Compile affected crates
+      - name: Compile affected Rust crates
         run: cargo check -p utopia-store -p utopia-server --all-targets
-      - name: Commit generated source changes
+      - name: Lock and verify control-plane dependencies
+        working-directory: control-plane
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm check
+      - name: Commit deterministic generated changes
         run: |
           if git diff --quiet; then
             echo "No generated changes"
@@ -35,5 +48,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "feat: wire hosted runtime into server [generated]"
+          git commit -m "chore: format hosted runtime and lock control plane"
           git push origin HEAD:feat/vercel-hosted-mvp
