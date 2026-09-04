@@ -60,3 +60,74 @@ impl BlobStore for LocalBlobStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobStore, VercelBlobStore};
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn content_address_accepts_only_lowercase_sha256() {
+        assert_eq!(VercelBlobStore::pathname(SHA).unwrap(), format!("files/{SHA}"));
+        assert!(VercelBlobStore::pathname("../secret").is_err());
+        assert!(VercelBlobStore::pathname(&SHA.to_uppercase()).is_err());
+        assert!(VercelBlobStore::pathname("abc").is_err());
+    }
+
+    #[tokio::test]
+    async fn put_requests_a_scoped_url_then_uploads_the_bytes() {
+        let server = MockServer::start().await;
+        let object_url = format!("{}/object", server.uri());
+
+        Mock::given(method("POST"))
+            .and(path("/control/blob/presign"))
+            .and(header("authorization", "Bearer internal-secret"))
+            .and(body_json(serde_json::json!({
+                "pathname": format!("files/{SHA}"),
+                "operation": "put"
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "presignedUrl": object_url })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/object"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let store = VercelBlobStore::new(server.uri(), "internal-secret".into()).unwrap();
+        store.put(SHA, b"hello").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_blob_is_reported_as_not_existing() {
+        let server = MockServer::start().await;
+        let object_url = format!("{}/missing", server.uri());
+
+        Mock::given(method("POST"))
+            .and(path("/control/blob/presign"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "presignedUrl": object_url })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("HEAD"))
+            .and(path("/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let store = VercelBlobStore::new(server.uri(), "internal-secret".into()).unwrap();
+        assert!(!store.exists(SHA).await.unwrap());
+    }
+}
