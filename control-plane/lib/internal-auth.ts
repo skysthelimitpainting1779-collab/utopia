@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
+import { isAuthorizedGitHubPreview } from "./github-oidc";
+
 function safeEqual(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual, "utf8");
   const expectedBytes = Buffer.from(expected, "utf8");
@@ -30,11 +32,14 @@ export function authorizeInternalRequest(request: Request): Response | null {
   return Response.json({ error: "Unauthorized" }, { status: 401 });
 }
 
-export function authorizeCronOrInternalRequest(request: Request): Response | null {
+export async function authorizeCronOrInternalRequest(
+  request: Request,
+): Promise<Response | null> {
   const authorization = request.headers.get("authorization");
   if (
     isAuthorized(authorization, process.env.UTOPIA_CONTROL_PLANE_TOKEN) ||
-    isAuthorized(authorization, process.env.CRON_SECRET)
+    isAuthorized(authorization, process.env.CRON_SECRET) ||
+    (await isAuthorizedGitHubPreview(authorization))
   ) {
     return null;
   }
