@@ -31,6 +31,7 @@ COPY --from=rust-build /src/target/release/utopia-server /usr/local/bin/utopia-s
 COPY --from=web /src/dist /app/web-dist
 
 ENV UTOPIA_HOSTED=true \
+    UTOPIA_MIGRATE_ON_STARTUP=false \
     UTOPIA_WEB_DIST=/app/web-dist \
     UTOPIA_DATA_DIR=/tmp/utopia \
     UTOPIA_DB_MAX_CONNECTIONS=8 \
