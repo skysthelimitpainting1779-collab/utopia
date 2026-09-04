@@ -1,0 +1,11 @@
+var R=require("../../../../../chunks/[turbopack]_runtime.js")("server/app/.well-known/workflow/v1/flow/route.js")
+R.c("server/chunks/[root-of-the-server]__1x4n57d._.js")
+R.c("server/chunks/13lc_@workflow_world_dist_index_0ynn5io.js")
+R.c("server/chunks/_1667_7i._.js")
+R.c("server/chunks/[root-of-the-server]__1c59tny._.js")
+R.c("server/chunks/[root-of-the-server]__1e8x1o1._.js")
+R.c("server/chunks/[root-of-the-server]__18bhk8y._.js")
+R.c("server/chunks/[root-of-the-server]__1tau405._.js")
+R.c("server/chunks/_next-internal_server_app__well-known_workflow_v1_flow_route_actions_1a_r-5j.js")
+R.m(16904)
+module.exports=R.m(16904).exports

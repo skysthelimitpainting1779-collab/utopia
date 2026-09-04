@@ -109,10 +109,8 @@ async fn tick(
     .await?;
 
     let worker_state = state.clone();
-    let report = utopia_store::hosted_jobs::drain(
-        &state.pool,
-        query.max_jobs.clamp(1, 8),
-        move |job| {
+    let report =
+        utopia_store::hosted_jobs::drain(&state.pool, query.max_jobs.clamp(1, 8), move |job| {
             let state = worker_state.clone();
             async move {
                 let result = crate::dispatch(&state, &job).await.map_err(|error| {
@@ -127,10 +125,9 @@ async fn tick(
                 }
                 result
             }
-        },
-    )
-    .await
-    .map_err(AppError::Other)?;
+        })
+        .await
+        .map_err(AppError::Other)?;
 
     Ok(Json(TickResponse {
         scheduled_sources,
@@ -151,10 +148,16 @@ mod tests {
         let mut headers = HeaderMap::new();
         assert!(!authorized(&headers, Some("secret")));
 
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer wrong"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong"),
+        );
         assert!(!authorized(&headers, Some("secret")));
 
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
         assert!(authorized(&headers, Some("secret")));
         assert!(!authorized(&headers, None));
     }

@@ -68,12 +68,11 @@ async fn stale_recovery_does_not_steal_a_fresh_running_job() -> anyhow::Result<(
     let ids: Vec<i64> = rows.into_iter().map(|(id,)| id).collect();
 
     utopia_store::hosted_jobs::recover_stale(&pool, 300).await?;
-    let states: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, status FROM jobs WHERE id = ANY($1) ORDER BY id",
-    )
-    .bind(&ids)
-    .fetch_all(&pool)
-    .await?;
+    let states: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, status FROM jobs WHERE id = ANY($1) ORDER BY id")
+            .bind(&ids)
+            .fetch_all(&pool)
+            .await?;
     sqlx::query("DELETE FROM jobs WHERE id = ANY($1)")
         .bind(&ids)
         .execute(&pool)

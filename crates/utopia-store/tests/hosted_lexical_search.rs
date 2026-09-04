@@ -59,13 +59,9 @@ async fn hosted_search_returns_only_live_matching_chunks() -> anyhow::Result<()>
     .execute(&pool)
     .await?;
 
-    let result = utopia_store::hosted_search::lexical_search(
-        &pool,
-        kb,
-        "UTOPIA_HOSTED_SEARCH_MARKER",
-        10,
-    )
-    .await;
+    let result =
+        utopia_store::hosted_search::lexical_search(&pool, kb, "UTOPIA_HOSTED_SEARCH_MARKER", 10)
+            .await;
 
     sqlx::query("DELETE FROM organizations WHERE id = $1")
         .bind(org)
@@ -82,13 +78,7 @@ async fn hosted_search_treats_blank_queries_as_no_results() -> anyhow::Result<()
         return Ok(());
     };
     let pool = PgPool::connect(&url).await?;
-    let result = utopia_store::hosted_search::lexical_search(
-        &pool,
-        Uuid::nil(),
-        "   ",
-        10,
-    )
-    .await?;
+    let result = utopia_store::hosted_search::lexical_search(&pool, Uuid::nil(), "   ", 10).await?;
     assert!(result.is_empty());
     Ok(())
 }

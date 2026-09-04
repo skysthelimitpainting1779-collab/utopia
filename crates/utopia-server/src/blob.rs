@@ -214,7 +214,10 @@ mod tests {
 
     #[test]
     fn content_address_accepts_only_lowercase_sha256() {
-        assert_eq!(VercelBlobStore::pathname(SHA).unwrap(), format!("files/{SHA}"));
+        assert_eq!(
+            VercelBlobStore::pathname(SHA).unwrap(),
+            format!("files/{SHA}")
+        );
         assert!(VercelBlobStore::pathname("../secret").is_err());
         assert!(VercelBlobStore::pathname(&SHA.to_uppercase()).is_err());
         assert!(VercelBlobStore::pathname("abc").is_err());

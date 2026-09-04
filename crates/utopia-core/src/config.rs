@@ -123,9 +123,7 @@ impl AppConfig {
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
             {
-                anyhow::bail!(
-                    "UTOPIA_CONTROL_PLANE_TOKEN is required when UTOPIA_HOSTED=true"
-                );
+                anyhow::bail!("UTOPIA_CONTROL_PLANE_TOKEN is required when UTOPIA_HOSTED=true");
             }
         }
         if self.blob_backend == "vercel"
@@ -186,7 +184,11 @@ mod tests {
     fn unknown_backends_are_rejected_instead_of_falling_back() {
         let mut cfg = AppConfig::default();
         cfg.blob_backend = "mystery".into();
-        assert!(cfg.validate().unwrap_err().to_string().contains("BLOB_BACKEND"));
+        assert!(cfg
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("BLOB_BACKEND"));
 
         cfg.blob_backend = "local".into();
         cfg.lexical_backend = "mystery".into();

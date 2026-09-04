@@ -1,0 +1,11 @@
+{
+  "/.well-known/workflow/v1/flow/route": "app/.well-known/workflow/v1/flow/route.js",
+  "/.well-known/workflow/v1/step/route": "app/.well-known/workflow/v1/step/route.js",
+  "/.well-known/workflow/v1/webhook/[token]/route": "app/.well-known/workflow/v1/webhook/[token]/route.js",
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/control/blob/presign/route": "app/control/blob/presign/route.js",
+  "/control/health/route": "app/control/health/route.js",
+  "/control/jobs/tick/route": "app/control/jobs/tick/route.js",
+  "/page": "app/page.js"
+}

@@ -75,10 +75,7 @@ impl AppState {
                 let token = cfg.control_plane_token.clone().ok_or_else(|| {
                     anyhow::anyhow!("UTOPIA_CONTROL_PLANE_TOKEN is required for Vercel Blob")
                 })?;
-                Arc::new(crate::blob::VercelBlobStore::new(
-                    control_plane_url,
-                    token,
-                )?)
+                Arc::new(crate::blob::VercelBlobStore::new(control_plane_url, token)?)
             }
             other => anyhow::bail!("unsupported blob backend: {other}"),
         };
