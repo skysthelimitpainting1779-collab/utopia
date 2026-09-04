@@ -59,12 +59,15 @@ jobs:
                   for item in caller.get("bindings", [])
               )
 
+          # Workflow -> Rust stays private. Rust -> control intentionally uses the
+          # same-deployment VERCEL_URL fallback in AppState, because Vercel rejects
+          # circular service binding graphs (utopia -> control -> utopia).
           assert has_binding(
               control, "utopia", "UTOPIA_INTERNAL_URL"
           ), "control -> utopia service binding is required"
-          assert has_binding(
+          assert not has_binding(
               utopia, "control", "UTOPIA_CONTROL_PLANE_URL"
-          ), "utopia -> control service binding is required"
+          ), "utopia -> control would create a circular Vercel service binding"
 
           rewrites = cfg.get("rewrites", [])
           assert rewrites == [
