@@ -5,6 +5,14 @@ node_modules/
 web/dist/
 *.log
 .DS_Store
+
+# Next.js / Workflow control-plane build and local runtime output.
+control-plane/.next/
+control-plane/.workflow-data/
+control-plane/node_modules/
+control-plane/.vercel/
+*.tsbuildinfo
+
 # 运行产物（上传原文 + Tantivy 索引）。**不写前导斜杠**：`/data` 只匹配仓库根，
 # 而服务在哪个目录起就在哪儿建 data/——`web/data` 就是这么漏进来的（30 个文件，
 # 含两份上传的测试文档）。跟 `_bench_*` 漏掉 `_holmes2.json` 是同一类错
