@@ -19,10 +19,13 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 32;
 /// session pool 很小（常见 15）；如果每个实例都长期保留自己的池，几个页面请求就能
 /// 把整池占满，之后连静态资源请求触发的冷启动都会在数据库建连处直接 500。
 ///
-/// 托管模式因此只允许每实例最多两个连接，并把空闲连接很快还给 Supavisor。
-/// 仍然保留 session mode，而不是在这里偷偷切 transaction mode：SQLx 的高层 query
-/// API 默认使用 prepared statements，而 Supavisor transaction mode 对 prepared
-/// statements 有不同约束。连接模式应该由部署配置显式选择，不该在存储层猜。
+/// 托管模式因此只允许每实例最多两个并发连接，并在每次借用结束时主动关闭连接，
+/// 而不是把它放回空闲队列。后者比 idle_timeout 更重要：Vercel 可以冻结温实例，
+/// 冻结期间 Tokio 的清理计时器不会运行，单靠空闲超时仍会留下数据库 session。
+///
+/// 这里仍保留 session mode，而不是偷偷切 transaction mode：SQLx 的高层 query API
+/// 默认使用 prepared statements，而 Supavisor transaction mode 对 prepared statements
+/// 有不同约束。连接模式应该由部署配置显式选择，不该在存储层猜。
 const HOSTED_MAX_CONNECTIONS: u32 = 2;
 const HOSTED_IDLE_SECONDS: u64 = 20;
 const HOSTED_MAX_LIFETIME_SECONDS: u64 = 300;
@@ -53,10 +56,13 @@ pub async fn connect(database_url: &str, max_connections: Option<u32>) -> anyhow
         options = options
             // 不预热连接；托管实例只有真的做数据库工作时才占一个 session。
             .min_connections(0)
-            // 温实例空闲后主动归还 session，避免 15 个旧实例永久吃满 session pool。
+            // 防御性保留：在不会被冻结的运行期里，空闲连接也应尽快归还。
             .idle_timeout(Some(Duration::from_secs(HOSTED_IDLE_SECONDS)))
-            // 即使持续有零星流量，也定期轮换，避免一个旧实例永久持有 session。
-            .max_lifetime(Some(Duration::from_secs(HOSTED_MAX_LIFETIME_SECONDS)));
+            .max_lifetime(Some(Duration::from_secs(HOSTED_MAX_LIFETIME_SECONDS)))
+            // 关键约束：serverless/Fluid 温实例可能被冻结，冻结时 idle reaper 不跑。
+            // 每次数据库借用结束就关掉 session，避免一个已经没有工作可做的实例
+            // 继续占着 Supavisor session pool。需要下一条查询时再按需重连。
+            .after_release(|_conn, _meta| Box::pin(async move { Ok(false) }));
     }
 
     let pool = options.connect(database_url).await?;
