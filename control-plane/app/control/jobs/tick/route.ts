@@ -6,6 +6,10 @@ import { drainUtopia } from "../../../../workflows/drain-utopia";
 export const runtime = "nodejs";
 
 async function startDrain(request: Request): Promise<Response> {
+  console.info("Utopia cron auth environment presence", {
+    controlPlaneToken: Boolean(process.env.UTOPIA_CONTROL_PLANE_TOKEN),
+    cronSecret: Boolean(process.env.CRON_SECRET),
+  });
   const denied = await authorizeCronOrInternalRequest(request);
   if (denied) return denied;
 
