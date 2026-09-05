@@ -33,6 +33,10 @@
   },
   "rewrites": [
     {
+      "source": "/.well-known/workflow/(.*)",
+      "destination": { "service": "control" }
+    },
+    {
       "source": "/control/blob/(.*)",
       "destination": { "service": "blob-control" }
     },
