@@ -1,18 +1,6 @@
 #!/bin/sh
 set -eu
 
-presence() {
-  if [ -n "${1:-}" ]; then
-    printf 'true'
-  else
-    printf 'false'
-  fi
-}
-
-if [ "${UTOPIA_HOSTED:-}" = "true" ]; then
-  echo "Hosted runtime environment presence: UTOPIA_DATABASE_URL=$(presence "${UTOPIA_DATABASE_URL:-}") POSTGRES_URL=$(presence "${POSTGRES_URL:-}") POSTGRES_URL_NON_POOLING=$(presence "${POSTGRES_URL_NON_POOLING:-}") DATABASE_URL=$(presence "${DATABASE_URL:-}") UTOPIA_CONTROL_PLANE_TOKEN=$(presence "${UTOPIA_CONTROL_PLANE_TOKEN:-}")" >&2
-fi
-
 # Prefer Utopia's explicit runtime URL, but consume the standard connection
 # variables injected by Vercel Marketplace storage integrations when present.
 # Supabase on Vercel provides POSTGRES_URL for the pooled runtime connection.
