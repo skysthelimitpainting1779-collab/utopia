@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 
+# Prefer Utopia's explicit runtime URL, but consume the standard connection
+# variables injected by Vercel Marketplace storage integrations when present.
+# Supabase on Vercel provides POSTGRES_URL for the pooled runtime connection.
+if [ "${UTOPIA_HOSTED:-}" = "true" ] && [ -z "${UTOPIA_DATABASE_URL:-}" ]; then
+  UTOPIA_DATABASE_URL="${POSTGRES_URL:-${POSTGRES_URL_NON_POOLING:-${DATABASE_URL:-}}}"
+  export UTOPIA_DATABASE_URL
+fi
+
 # Hosted Vercel deployments must never generate the credential sealing key on
 # ephemeral disk. Prefer an explicit Vercel environment variable; when it is
 # absent, load the persistent 32-byte key from Supabase Vault using the existing
@@ -8,7 +16,7 @@ set -eu
 # and never printed.
 if [ "${UTOPIA_HOSTED:-}" = "true" ] && [ -z "${UTOPIA_SECRET_KEY:-}" ]; then
   if [ -z "${UTOPIA_DATABASE_URL:-}" ]; then
-    echo "UTOPIA_DATABASE_URL is required to load the hosted sealing key" >&2
+    echo "No hosted Postgres connection is configured (UTOPIA_DATABASE_URL/POSTGRES_URL)" >&2
     exit 1
   fi
 
