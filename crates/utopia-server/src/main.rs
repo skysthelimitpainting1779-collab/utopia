@@ -9,6 +9,7 @@ mod docs_corpus;
 mod error;
 mod extraction;
 mod github_issues;
+mod hosted;
 mod ingest_sources;
 mod jira_issues;
 mod live;
@@ -69,20 +70,24 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = AppConfig::load()?;
 
-    // 迁移要建表建触发器，运行时不需要那些权限。两者分开，应用才能用一个
-    // 只读写业务表、对台账只增不改的受限角色连库。迁移池用完立即释放，
-    // 那个高权限连接不在运行期常驻。
-    let migration_url = cfg.migration_url().to_string();
-    let separate_migration_role = cfg.migration_url.is_some();
-    {
-        let mig_pool = utopia_store::db::connect(&migration_url, Some(2)).await?;
-        utopia_store::db::migrate(&mig_pool).await?;
-        mig_pool.close().await;
-    }
-    if separate_migration_role {
-        tracing::info!("数据库迁移完成（迁移身份与运行身份分离）");
+    if cfg.migrate_on_startup {
+        // 迁移要建表建触发器，运行时不需要那些权限。两者分开，应用才能用一个
+        // 只读写业务表、对台账只增不改的受限角色连库。迁移池用完立即释放，
+        // 那个高权限连接不在运行期常驻。
+        let migration_url = cfg.migration_url().to_string();
+        let separate_migration_role = cfg.migration_url.is_some();
+        {
+            let mig_pool = utopia_store::db::connect(&migration_url, Some(2)).await?;
+            utopia_store::db::migrate(&mig_pool).await?;
+            mig_pool.close().await;
+        }
+        if separate_migration_role {
+            tracing::info!("数据库迁移完成（迁移身份与运行身份分离）");
+        } else {
+            tracing::info!("数据库迁移完成");
+        }
     } else {
-        tracing::info!("数据库迁移完成");
+        tracing::info!("跳过启动迁移（由部署阶段负责）");
     }
 
     let pool = utopia_store::db::connect(&cfg.database_url, cfg.db_max_connections).await?;
@@ -115,7 +120,9 @@ async fn main() -> anyhow::Result<()> {
     //
     // 判据是「库里有分块而索引空着」，不是「数目对不对得上」：后者在正常运行中
     // 也会短暂不等（一篇文档正在索引），拿它当判据会让每次启动都重建一遍。
-    reindex_if_empty(&pool, &search).await;
+    if cfg.lexical_backend == "tantivy" {
+        reindex_if_empty(&pool, &search).await;
+    }
 
     // JWT 密钥：环境变量优先（轮换、多实例显式对齐走这条），否则用库里那条；
     // 库里也没有就现生成一条存进去。生成放在这里而不是 store 里，是因为
@@ -133,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let state = AppState::new(pool.clone(), &cfg, search, jwt_secret);
+    let state = AppState::new(pool.clone(), &cfg, search, jwt_secret)?;
 
     // worker 并发数：系统设置持久化，启动时装载；运行中经同一 AtomicUsize 热调
     let n = utopia_store::access::worker_concurrency(&pool)
@@ -144,107 +151,114 @@ async fn main() -> anyhow::Result<()> {
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    // 任务分发：新任务类型在这里注册
-    let worker_state = state.clone();
-    tokio::spawn(utopia_store::jobs::run_worker(
-        pool,
-        state.worker_concurrency.clone(),
-        move |job| {
-            let st = worker_state.clone();
-            async move {
-                // 任务失败时看一眼是不是模型端点连不上——那是系统级故障，
-                // 而现在它只会留在 jobs.last_error 里，没有任何界面看得到
-                //
-                // 没救的失败在这里挂上标记，队列据此不再退避重试（#195）：
-                // 判据在这一侧，因为 `utopia-store` 看不见 LLM 的错误类型
-                let result = dispatch(&st, &job)
-                    .await
-                    .map_err(|e| match alerting::hopeless(&e) {
-                        true => e.context(utopia_core::Terminal),
-                        false => e,
-                    });
-                if let Err(e) = &result {
-                    alerting::observe_job_failure(&st, &job, e).await;
+    if !cfg.hosted {
+        // 任务分发：新任务类型在这里注册
+        let worker_state = state.clone();
+        tokio::spawn(utopia_store::jobs::run_worker(
+            pool,
+            state.worker_concurrency.clone(),
+            move |job| {
+                let st = worker_state.clone();
+                async move {
+                    // 任务失败时看一眼是不是模型端点连不上——那是系统级故障，
+                    // 而现在它只会留在 jobs.last_error 里，没有任何界面看得到
+                    //
+                    // 没救的失败在这里挂上标记，队列据此不再退避重试（#195）：
+                    // 判据在这一侧，因为 `utopia-store` 看不见 LLM 的错误类型
+                    let result =
+                        dispatch(&st, &job)
+                            .await
+                            .map_err(|e| match alerting::hopeless(&e) {
+                                true => e.context(utopia_core::Terminal),
+                                false => e,
+                            });
+                    if let Err(e) = &result {
+                        alerting::observe_job_failure(&st, &job, e).await;
+                    }
+                    result
                 }
-                result
-            }
-        },
-    ));
+            },
+        ));
 
-    alerting::spawn_retention_sweep(state.clone());
+        alerting::spawn_retention_sweep(state.clone());
 
-    // 定时摄入调度器：每分钟扫一次到期来源，入队同步任务
-    let sched_state = state.clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tick.tick().await;
-            match utopia_store::sources::due_sources(&sched_state.pool).await {
-                Ok(due) => {
-                    for s in due {
-                        match utopia_store::sources::mark_queued(&sched_state.pool, s.id).await {
-                            Ok(true) => {
-                                if let Err(e) = utopia_store::jobs::enqueue(
-                                    &sched_state.pool,
-                                    "sync_source",
-                                    serde_json::json!({ "source_id": s.id }),
-                                )
-                                .await
-                                {
-                                    tracing::warn!(source_id = %s.id, error = %e, "同步任务入队失败");
+        // 定时摄入调度器：每分钟扫一次到期来源，入队同步任务
+        let sched_state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                match utopia_store::sources::due_sources(&sched_state.pool).await {
+                    Ok(due) => {
+                        for s in due {
+                            match utopia_store::sources::mark_queued(&sched_state.pool, s.id).await
+                            {
+                                Ok(true) => {
+                                    if let Err(e) = utopia_store::jobs::enqueue(
+                                        &sched_state.pool,
+                                        "sync_source",
+                                        serde_json::json!({ "source_id": s.id }),
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(source_id = %s.id, error = %e, "同步任务入队失败");
+                                    }
+                                }
+                                Ok(false) => {}
+                                Err(e) => {
+                                    tracing::warn!(source_id = %s.id, error = %e, "标记入队失败")
                                 }
                             }
-                            Ok(false) => {}
-                            Err(e) => tracing::warn!(source_id = %s.id, error = %e, "标记入队失败"),
                         }
                     }
+                    Err(e) => tracing::warn!(error = %e, "扫描到期来源失败"),
                 }
-                Err(e) => tracing::warn!(error = %e, "扫描到期来源失败"),
             }
-        }
-    });
+        });
 
-    // 定时推理调度器（0002 R1）。
-    //
-    // **必须定时，不能只靠手点**：事实是持续变的——每篇文档抽取都在加边——而
-    // 派生只在跑的那一刻算。不定时的话，下一篇文档进来之后图上的派生就是缺的，
-    // 而这种缺失界面上看不出来（不是错，是新链没推）。
-    //
-    // 与来源同步共用一个节拍：每分钟扫一遍，到期的入队。真正的推导在任务里跑，
-    // 不在这个循环里——一个大库全量重推可能要几秒，卡在调度循环里会拖住别的库
-    let infer_state = state.clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tick.tick().await;
-            match utopia_store::reasoning::due_for_inference(&infer_state.pool).await {
-                Ok(due) => {
-                    for kb_id in due {
-                        if let Err(e) = utopia_store::jobs::enqueue(
-                            &infer_state.pool,
-                            "materialize_inferences",
-                            serde_json::json!({ "kb_id": kb_id }),
-                        )
-                        .await
-                        {
-                            tracing::warn!(kb_id = %kb_id, error = %e, "推理任务入队失败");
+        // 定时推理调度器（0002 R1）。
+        //
+        // **必须定时，不能只靠手点**：事实是持续变的——每篇文档抽取都在加边——而
+        // 派生只在跑的那一刻算。不定时的话，下一篇文档进来之后图上的派生就是缺的，
+        // 而这种缺失界面上看不出来（不是错，是新链没推）。
+        //
+        // 与来源同步共用一个节拍：每分钟扫一遍，到期的入队。真正的推导在任务里跑，
+        // 不在这个循环里——一个大库全量重推可能要几秒，卡在调度循环里会拖住别的库
+        let infer_state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                match utopia_store::reasoning::due_for_inference(&infer_state.pool).await {
+                    Ok(due) => {
+                        for kb_id in due {
+                            if let Err(e) = utopia_store::jobs::enqueue(
+                                &infer_state.pool,
+                                "materialize_inferences",
+                                serde_json::json!({ "kb_id": kb_id }),
+                            )
+                            .await
+                            {
+                                tracing::warn!(kb_id = %kb_id, error = %e, "推理任务入队失败");
+                            }
                         }
                     }
+                    Err(e) => tracing::warn!(error = %e, "扫描到期推理失败"),
                 }
-                Err(e) => tracing::warn!(error = %e, "扫描到期推理失败"),
             }
-        }
-    });
+        });
+    }
 
-    let app = api::router(state, &cfg);
-    let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
-    tracing::info!("Utopia 服务启动于 http://{}", cfg.bind_addr);
+    let app = api::router(state.clone(), &cfg).merge(hosted::router(state));
+    let bind_addr = cfg.runtime_bind_addr()?;
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!("Utopia 服务启动于 http://{}", bind_addr);
 
     // 浏览器可能把 localhost 解析为 ::1（IPv6）——配置为 IPv4 地址时补一个同端口的
     // IPv6 回环监听，避免「找不到 localhost」。绑定失败（端口被占/无 IPv6）仅告警。
-    if let Ok(addr) = cfg.bind_addr.parse::<std::net::SocketAddrV4>() {
+    if let Ok(addr) = bind_addr.parse::<std::net::SocketAddrV4>() {
         let v6_addr = format!("[::1]:{}", addr.port());
         match tokio::net::TcpListener::bind(&v6_addr).await {
             Ok(v6_listener) => {

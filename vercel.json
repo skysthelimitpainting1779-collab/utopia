@@ -1,0 +1,58 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "utopia": {
+      "root": ".",
+      "entrypoint": "Dockerfile.vercel",
+      "runtime": "container",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "blob-control",
+          "format": "url",
+          "env": "UTOPIA_CONTROL_PLANE_URL"
+        }
+      ]
+    },
+    "control": {
+      "root": "control-plane",
+      "framework": "nextjs",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "utopia",
+          "format": "url",
+          "env": "UTOPIA_INTERNAL_URL"
+        }
+      ]
+    },
+    "blob-control": {
+      "root": "blob-control",
+      "framework": "nextjs"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/.well-known/workflow/(.*)",
+      "destination": { "service": "control" }
+    },
+    {
+      "source": "/control/blob/(.*)",
+      "destination": { "service": "blob-control" }
+    },
+    {
+      "source": "/control/(.*)",
+      "destination": { "service": "control" }
+    },
+    {
+      "source": "/(.*)",
+      "destination": { "service": "utopia" }
+    }
+  ],
+  "crons": [
+    {
+      "path": "/control/jobs/tick",
+      "schedule": "* * * * *"
+    }
+  ]
+}
