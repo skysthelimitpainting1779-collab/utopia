@@ -54,7 +54,8 @@ async fn run(state: &AppState, document_id: Uuid) -> anyhow::Result<()> {
         let search = state.search.clone();
         let kb = doc.kb_id.to_string();
         let did = document_id.to_string();
-        tokio::task::spawn_blocking(move || search.reindex_document(&kb, &did, &chunk_pairs)).await??;
+        tokio::task::spawn_blocking(move || search.reindex_document(&kb, &did, &chunk_pairs))
+            .await??;
     }
 
     // 4. embedding（工作区配置了 embedding 模型才做；没配也算 ready，先享受词法搜索）
