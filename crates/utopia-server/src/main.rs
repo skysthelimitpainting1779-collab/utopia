@@ -108,21 +108,27 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(rows = sealed, "凭据补封完成");
     }
 
-    let index_dir = std::path::Path::new(&cfg.data_dir).join("index");
-    let search = Arc::new(SearchIndex::open(&index_dir)?);
-    tracing::info!("全文索引就绪: {}", index_dir.display());
+    // 自部署才需要持久 Tantivy。托管/Postgres 词法模式使用纯内存占位实例，
+    // 因而启动、扩缩容和冷启动都不依赖任何实例本地目录。
+    let search = if cfg.lexical_backend == "tantivy" {
+        let index_dir = std::path::Path::new(&cfg.data_dir).join("index");
+        let search = Arc::new(SearchIndex::open(&index_dir)?);
+        tracing::info!("全文索引就绪: {}", index_dir.display());
 
-    // **索引落空就自己重建，不给按钮。**
-    //
-    // 索引是独立于数据库的一份文件：换机器、卷没挂上、目录损坏，任何一样都会让它
-    // 落空。而落空之后检索只会静默回零——界面上看不出任何异样，用户会以为是
-    // 「确实没有匹配」。这种失败不该靠人先意识到再去点一个按钮。
-    //
-    // 判据是「库里有分块而索引空着」，不是「数目对不对得上」：后者在正常运行中
-    // 也会短暂不等（一篇文档正在索引），拿它当判据会让每次启动都重建一遍。
-    if cfg.lexical_backend == "tantivy" {
+        // **索引落空就自己重建，不给按钮。**
+        //
+        // 索引是独立于数据库的一份文件：换机器、卷没挂上、目录损坏，任何一样都会让它
+        // 落空。而落空之后检索只会静默回零——界面上看不出任何异样，用户会以为是
+        // 「确实没有匹配」。这种失败不该靠人先意识到再去点一个按钮。
+        //
+        // 判据是「库里有分块而索引空着」，不是「数目对不对得上」：后者在正常运行中
+        // 也会短暂不等（一篇文档正在索引），拿它当判据会让每次启动都重建一遍。
         reindex_if_empty(&pool, &search).await;
-    }
+        search
+    } else {
+        tracing::info!("Postgres 词法检索已启用；跳过本地 Tantivy 文件索引");
+        Arc::new(SearchIndex::in_memory()?)
+    };
 
     // JWT 密钥：环境变量优先（轮换、多实例显式对齐走这条），否则用库里那条；
     // 库里也没有就现生成一条存进去。生成放在这里而不是 store 里，是因为
