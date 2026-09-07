@@ -31,9 +31,12 @@ const HOSTED_IDLE_SECONDS: u64 = 20;
 const HOSTED_MAX_LIFETIME_SECONDS: u64 = 300;
 
 fn hosted_runtime() -> bool {
-    std::env::var("UTOPIA_HOSTED")
-        .ok()
-        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    std::env::var("UTOPIA_HOSTED").ok().is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 pub async fn connect(database_url: &str, max_connections: Option<u32>) -> anyhow::Result<PgPool> {
