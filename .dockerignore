@@ -3,6 +3,9 @@
 # pnpm install 出来的那份（宿主机若是 Windows/macOS，二进制不兼容）。
 target/
 **/node_modules/
+**/.next/
+**/.workflow-data/
+**/.vercel/
 .git/
 .github/
 data/
@@ -11,3 +14,4 @@ docs/
 .claude/
 .env
 *.log
+*.tsbuildinfo

@@ -1,0 +1,297 @@
+name: Hosted MVP CI
+
+on:
+  push:
+    branches:
+      - feat/vercel-hosted-mvp
+      - dev
+  workflow_dispatch:
+
+concurrency:
+  group: hosted-mvp-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  source-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject generated hosted-service output
+        run: |
+          tracked=$(git ls-files \
+            'control-plane/.next/**' 'control-plane/.workflow-data/**' 'control-plane/node_modules/**' \
+            'blob-control/.next/**' 'blob-control/.workflow-data/**' 'blob-control/node_modules/**')
+          if [ -n "$tracked" ]; then
+            echo "Generated hosted-service output is tracked:"
+            echo "$tracked"
+            exit 1
+          fi
+      - name: Validate Vercel Services topology
+        run: |
+          python3 - <<'PY'
+          import json
+
+          with open("vercel.json", encoding="utf-8") as handle:
+              cfg = json.load(handle)
+
+          services = cfg.get("services")
+          assert isinstance(services, dict), "vercel.json must define services"
+          assert set(services) == {"utopia", "control", "blob-control"}, (
+              "unexpected Vercel service set"
+          )
+
+          utopia = services["utopia"]
+          control = services["control"]
+          blob = services["blob-control"]
+
+          assert utopia.get("root") == "."
+          assert utopia.get("entrypoint") == "Dockerfile.vercel"
+          assert utopia.get("runtime") == "container"
+          assert control.get("root") == "control-plane"
+          assert control.get("framework") == "nextjs"
+          assert blob.get("root") == "blob-control"
+          assert blob.get("framework") == "nextjs"
+
+          def service_bindings(caller):
+              result = []
+              for item in caller.get("bindings", []):
+                  assert item.get("type") == "service", "only service bindings are expected"
+                  target = item.get("service")
+                  assert target in services, f"binding targets unknown service: {target}"
+                  assert item.get("format") == "url", "service bindings must inject URLs"
+                  assert isinstance(item.get("env"), str) and item["env"], (
+                      "service bindings must declare a non-empty env name"
+                  )
+                  result.append((target, item["env"]))
+              return result
+
+          binding_map = {
+              name: service_bindings(service)
+              for name, service in services.items()
+          }
+
+          assert binding_map["control"] == [("utopia", "UTOPIA_INTERNAL_URL")], (
+              "control -> utopia binding is required"
+          )
+          assert binding_map["utopia"] == [
+              ("blob-control", "UTOPIA_CONTROL_PLANE_URL")
+          ], "utopia -> blob-control binding is required"
+          assert binding_map["blob-control"] == [], (
+              "blob-control must remain a leaf service"
+          )
+
+          # Vercel rejects circular service-binding graphs. Keep this generic so
+          # future service additions cannot silently recreate a cycle.
+          graph = {
+              name: [target for target, _ in bindings]
+              for name, bindings in binding_map.items()
+          }
+          visiting = set()
+          visited = set()
+
+          def visit(node):
+              if node in visiting:
+                  raise AssertionError(f"circular Vercel service binding at {node}")
+              if node in visited:
+                  return
+              visiting.add(node)
+              for target in graph[node]:
+                  visit(target)
+              visiting.remove(node)
+              visited.add(node)
+
+          for node in graph:
+              visit(node)
+
+          rewrites = cfg.get("rewrites", [])
+          assert rewrites == [
+              {
+                  "source": "/control/blob/(.*)",
+                  "destination": {"service": "blob-control"},
+              },
+              {
+                  "source": "/control/(.*)",
+                  "destination": {"service": "control"},
+              },
+              {
+                  "source": "/(.*)",
+                  "destination": {"service": "utopia"},
+              },
+          ], "Vercel service rewrites must preserve most-specific-first routing"
+
+          crons = cfg.get("crons", [])
+          assert {
+              "path": "/control/jobs/tick",
+              "schedule": "* * * * *",
+          } in crons, "once-per-minute hosted drain cron is required"
+          PY
+          bash -n scripts/smoke-hosted.sh
+          git diff --check
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Build
+        run: cargo build --workspace
+
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: utopia
+          POSTGRES_PASSWORD: utopia
+          POSTGRES_DB: utopia
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U utopia -d utopia"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      UTOPIA_DATABASE_URL: postgres://utopia:utopia@localhost:5432/utopia
+      UTOPIA_TEST_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features rustls,postgres --locked
+      - name: Migrate twice
+        run: |
+          sqlx migrate run --database-url "$UTOPIA_DATABASE_URL"
+          sqlx migrate run --database-url "$UTOPIA_DATABASE_URL"
+      - name: Database-backed tests
+        run: cargo test -p utopia-store
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  control-plane:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: control-plane
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: control-plane/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: control-plane/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  blob-control:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blob-control
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: blob-control/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: blob-control/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Vercel container image
+        run: docker build --file Dockerfile.vercel --tag utopia-vercel:test .
+
+  preview-health:
+    if: github.ref == 'refs/heads/feat/vercel-hosted-mvp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      BASE_URL: https://utopia-git-feat-vercel-hosted-mvp-its-him.vercel.app
+      EXPECTED_SHA: ${{ github.sha }}
+    steps:
+      - name: Let the Git-triggered Preview enter the deployment queue
+        run: sleep 30
+      - uses: actions/github-script@v7
+        id: oidc
+        with:
+          script: |
+            const token = await core.getIDToken();
+            core.setSecret(token);
+            core.setOutput('token', token);
+      - name: Wait for this exact Preview and verify all hosted services
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          set -euo pipefail
+          header="x-vercel-trusted-oidc-idp-token: $OIDC_TOKEN"
+          matched=false
+
+          for attempt in $(seq 1 90); do
+            body=$(curl -sS --connect-timeout 10 --max-time 20 -H "$header" \
+              "$BASE_URL/control/health" || true)
+            commit=$(printf '%s' "$body" | jq -r '.commit // empty' 2>/dev/null || true)
+            status=$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)
+            if [ "$status" = "ok" ] && [ "$commit" = "$EXPECTED_SHA" ]; then
+              matched=true
+              break
+            fi
+            sleep 5
+          done
+
+          [ "$matched" = true ] || {
+            echo "Exact protected Preview did not become reachable through GitHub OIDC" >&2
+            exit 1
+          }
+
+          for path in /control/health /control/blob/health /api/v1/health; do
+            code=$(curl -sS --connect-timeout 10 --max-time 30 \
+              -H "$header" -o /tmp/health.json -w '%{http_code}' "$BASE_URL$path")
+            cat /tmp/health.json
+            [ "$code" = "200" ] || {
+              echo "$path returned HTTP $code" >&2
+              exit 1
+            }
+            jq -e '.status == "ok"' /tmp/health.json >/dev/null
+          done

@@ -39,24 +39,30 @@ pub struct Hit {
 impl SearchIndex {
     pub fn open(dir: &Path) -> anyhow::Result<Self> {
         std::fs::create_dir_all(dir)?;
-
-        let mut schema_builder = Schema::builder();
-        let text_indexing = TextFieldIndexing::default()
-            .set_tokenizer(JIEBA)
-            .set_index_option(IndexRecordOption::WithFreqsAndPositions);
-        let f_chunk_id = schema_builder.add_text_field("chunk_id", STRING | STORED);
-        let f_kb_id = schema_builder.add_text_field("kb_id", STRING);
-        let f_document_id = schema_builder.add_text_field("document_id", STRING);
-        let f_text = schema_builder.add_text_field(
-            "text",
-            TextOptions::default().set_indexing_options(text_indexing),
-        );
-        let schema = schema_builder.build();
+        let (schema, f_chunk_id, f_kb_id, f_document_id, f_text) = schema();
 
         let mmap =
             tantivy::directory::MmapDirectory::open(dir).context("Failed to open index dir")?;
         let index =
             Index::open_or_create(mmap, schema).context("Failed to open/create Tantivy index")?;
+        Self::from_index(index, f_chunk_id, f_kb_id, f_document_id, f_text)
+    }
+
+    /// 临时内存索引。托管/Postgres 词法模式不依赖进程本地文件系统，
+    /// 但 AppState 仍保留统一的 SearchIndex 接缝供自部署代码路径使用。
+    pub fn in_memory() -> anyhow::Result<Self> {
+        let (schema, f_chunk_id, f_kb_id, f_document_id, f_text) = schema();
+        let index = Index::create_in_ram(schema);
+        Self::from_index(index, f_chunk_id, f_kb_id, f_document_id, f_text)
+    }
+
+    fn from_index(
+        index: Index,
+        f_chunk_id: Field,
+        f_kb_id: Field,
+        f_document_id: Field,
+        f_text: Field,
+    ) -> anyhow::Result<Self> {
         index
             .tokenizers()
             .register(JIEBA, tantivy_jieba::JiebaTokenizer::new());
@@ -168,6 +174,27 @@ impl SearchIndex {
         }
         Ok(hits)
     }
+}
+
+fn schema() -> (Schema, Field, Field, Field, Field) {
+    let mut schema_builder = Schema::builder();
+    let text_indexing = TextFieldIndexing::default()
+        .set_tokenizer(JIEBA)
+        .set_index_option(IndexRecordOption::WithFreqsAndPositions);
+    let f_chunk_id = schema_builder.add_text_field("chunk_id", STRING | STORED);
+    let f_kb_id = schema_builder.add_text_field("kb_id", STRING);
+    let f_document_id = schema_builder.add_text_field("document_id", STRING);
+    let f_text = schema_builder.add_text_field(
+        "text",
+        TextOptions::default().set_indexing_options(text_indexing),
+    );
+    (
+        schema_builder.build(),
+        f_chunk_id,
+        f_kb_id,
+        f_document_id,
+        f_text,
+    )
 }
 
 /// Reciprocal Rank Fusion：融合多路召回的排名（k=60 为经验常数）。

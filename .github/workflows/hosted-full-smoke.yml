@@ -1,0 +1,61 @@
+name: Hosted Full Smoke
+
+on:
+  push:
+    branches:
+      - feat/vercel-hosted-mvp
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  full-smoke:
+    if: contains(github.event.head_commit.message, '[full-smoke]')
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL: https://utopia-git-feat-vercel-hosted-mvp-its-him.vercel.app
+      EXPECTED_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for the exact protected Preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          audience='https%3A%2F%2Fgithub.com%2Fskysthelimitpainting1779-collab'
+          mint_oidc() {
+            curl -fsS \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" | jq -r '.value'
+          }
+
+          matched=false
+          for attempt in $(seq 1 180); do
+            oidc=$(mint_oidc)
+            body=$(curl -sS --connect-timeout 10 --max-time 20 \
+              -H "x-vercel-trusted-oidc-idp-token: $oidc" \
+              "$BASE_URL/control/health" || true)
+            commit=$(printf '%s' "$body" | jq -r '.commit // empty' 2>/dev/null || true)
+            status=$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)
+            if [ "$status" = "ok" ] && [ "$commit" = "$EXPECTED_SHA" ]; then
+              matched=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$matched" = true ] || {
+            echo "Exact protected Preview did not become reachable" >&2
+            exit 1
+          }
+
+      - name: Run upload → Blob → Workflow → Postgres → search smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          audience='https%3A%2F%2Fgithub.com%2Fskysthelimitpainting1779-collab'
+          oidc=$(curl -fsS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" | jq -r '.value')
+          export VERCEL_TRUSTED_OIDC_TOKEN="$oidc"
+          bash scripts/smoke-hosted.sh

@@ -46,15 +46,19 @@ async fn run(state: &AppState, document_id: Uuid) -> anyhow::Result<()> {
             .await?;
     let chunk_count = chunk_pairs.len() as i32;
 
-    // 3. 全文索引（Tantivy）
+    // 3. 词法索引。托管/Postgres 模式以 chunks 正文为真值，replace_chunks 已经完成写入；
+    // 只有本地 Tantivy 模式需要维护进程外的文件索引。
     utopia_store::documents::set_status(&state.pool, document_id, "indexing").await?;
     state.emit_document(doc.kb_id, document_id);
-    let search = state.search.clone();
-    let kb = doc.kb_id.to_string();
-    let did = document_id.to_string();
-    tokio::task::spawn_blocking(move || search.reindex_document(&kb, &did, &chunk_pairs)).await??;
+    if state.lexical_backend == "tantivy" {
+        let search = state.search.clone();
+        let kb = doc.kb_id.to_string();
+        let did = document_id.to_string();
+        tokio::task::spawn_blocking(move || search.reindex_document(&kb, &did, &chunk_pairs))
+            .await??;
+    }
 
-    // 4. embedding（工作区配置了 embedding 模型才做；没配也算 ready，先享受 BM25 搜索）
+    // 4. embedding（工作区配置了 embedding 模型才做；没配也算 ready，先享受词法搜索）
     let kb_row = utopia_store::kbs::get(&state.pool, doc.kb_id).await?;
     let settings = utopia_store::settings::get(&state.pool, kb_row.workspace_id).await?;
     if let Some(client) = settings.as_ref().and_then(llm_util::embed_client) {
@@ -134,15 +138,18 @@ pub async fn memory_ingest(
         }
     }
 
-    let chunks = utopia_store::documents::chunks_full(&state.pool, document_id).await?;
-    let pairs: Vec<(String, String)> = chunks
-        .iter()
-        .map(|c| (c.id.to_string(), c.text.clone()))
-        .collect();
-    let search = state.search.clone();
-    let kb = doc.kb_id.to_string();
-    let did = document_id.to_string();
-    tokio::task::spawn_blocking(move || search.reindex_document(&kb, &did, &pairs)).await??;
+    // Postgres 词法模式不需要维护任何实例本地索引；自部署 Tantivy 行为保持不变。
+    if state.lexical_backend == "tantivy" {
+        let chunks = utopia_store::documents::chunks_full(&state.pool, document_id).await?;
+        let pairs: Vec<(String, String)> = chunks
+            .iter()
+            .map(|c| (c.id.to_string(), c.text.clone()))
+            .collect();
+        let search = state.search.clone();
+        let kb = doc.kb_id.to_string();
+        let did = document_id.to_string();
+        tokio::task::spawn_blocking(move || search.reindex_document(&kb, &did, &pairs)).await??;
+    }
 
     if settings.as_ref().is_some_and(|s| s.chat_ready()) {
         utopia_store::documents::set_graph_status(&state.pool, document_id, "queued").await?;
